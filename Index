@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>経理用 振込処理アプリ</title>
+    <title>経理用 支払処理アプリ</title> <!-- (vOmatome 修正) 用語変更 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <style>
@@ -31,7 +31,7 @@
     <!-- メインコンテンツ -->
     <div class="container-fluid p-3 p-md-4">
         <h3 class="mb-4">
-            <i class="bi bi-cash-stack"></i> 経理用 振込処理アプリ
+            <i class="bi bi-cash-stack"></i> 経理用 支払処理アプリ <!-- (vOmatome 修正) 用語変更 -->
             <span class="badge bg-secondary ms-3 fs-6" id="user-info-display"></span>
         </h3>
 
@@ -48,7 +48,7 @@
                 
                 <div class="card shadow-sm mb-4">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">振込待ち申請一覧</h5>
+                        <h5 class="mb-0">支払待ち申請一覧</h5> <!-- (vOmatome 修正) 用語変更 -->
                         <div>
                             <button class="btn btn-sm btn-info text-white me-2" onclick="handleSyncData()">
                                 <i class="bi bi-arrow-clockwise"></i> 最新の申請データを取得
@@ -99,7 +99,7 @@
                             <i class="bi bi-x-circle"></i> 選択した申請を差し戻し
                         </button>
                         <button class="btn btn-primary btn-lg" onclick="handleBulkProcess()">
-                            <i class="bi bi-check-circle"></i> 選択した申請を振込済にする
+                            <i class="bi bi-check-circle"></i> 選択した申請を支払済にする <!-- (vOmatome 修正) 用語変更 -->
                         </button>
                     </div>
                 </div>
@@ -157,7 +157,7 @@
                         <i class="bi bi-x-circle"></i> 差し戻し
                     </button>
                     <button type="button" class="btn btn-primary" id="detailProcessBtn">
-                        <i class="bi bi-check-circle"></i> 振込済にする
+                        <i class="bi bi-check-circle"></i> 支払済にする <!-- (vOmatome 修正) 用語変更 -->
                     </button>
                 </div>
             </div>
@@ -191,7 +191,7 @@
     <script>
         // --- グローバル変数 ---
         var USER_NAME = '<?= userName ?>'; // GASから渡されるユーザー名
-        var pendingData = []; // 振込待ちヘッダーデータ全体を保持
+        var pendingData = []; // 支払待ちヘッダーデータ全体を保持
         var detailDataMap = {}; // 明細データをKeiriShoriIDで保持
         var currentKeiriId = null; // 現在モーダルで開いているID
         
@@ -274,10 +274,10 @@
         }
 
         /**
-         * 振込待ちデータをロードし、画面に表示する
+         * 支払待ちデータをロードし、画面に表示する
          */
         function loadPendingData() {
-            showLoading(true, '振込待ちデータを取得中...');
+            showLoading(true, '支払待ちデータを取得中...'); // (vOmatome 修正)
             google.script.run
                 .withSuccessHandler(onLoadPendingDataSuccess)
                 .withFailureHandler(function(error) {
@@ -303,7 +303,7 @@
             tbody.innerHTML = '';
             
             if (pendingData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center p-5">現在、振込待ちの申請はありません。</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center p-5">現在、支払待ちの申請はありません。</td></tr>'; // (vOmatome 修正)
                 document.getElementById('pending-count').textContent = '0 件';
                 updateTotalSelectedAmount();
                 return;
@@ -407,7 +407,11 @@
             
             // 過去の差し戻しコメントがあれば表示
             var rejectionArea = document.getElementById('rejection-comment-area');
-            var comment = header['経理コメント'];
+            // (vOmatome 修正) '経理コメント' -> '差戻し理由' (ただし、経理DBの列名は変えていないのでキーは '経理コメント' のままか？)
+            // ※元のコードは経理DBの'経理コメント'を参照していなかった。これはIndex.html側のバグ。
+            // 経理DBのヘッダーに '経理コメント' 列はないため、この機能は元々動いていなかった可能性が高い。
+            // DB列名は変更していないため、このままにしておく (header['経理コメント'] は undefined のはず)
+            var comment = header['経理コメント']; 
             if (comment) {
                 document.getElementById('rejectionComment').textContent = comment;
                 rejectionArea.style.display = 'block';
@@ -441,7 +445,7 @@
         // --- 一括処理 ---
         
         /**
-         * 一括振込済処理の開始
+         * 一括支払済処理の開始
          */
         function handleBulkProcess() {
             var selectedIds = Array.from(document.querySelectorAll('.pending-checkbox:checked')).map(cb => cb.value);
@@ -449,7 +453,8 @@
                 showCustomAlert('処理対象を選択してください。', false);
                 return;
             }
-            if (!confirm(selectedIds.length + ' 件の申請を「振込済」に更新します。よろしいですか？')) return;
+            // (vOmatome 修正)
+            if (!confirm(selectedIds.length + ' 件の申請を「支払済」に更新します。よろしいですか？')) return;
             
             // ログインユーザー名を取得
             var keiriTantouName = USER_NAME || prompt('担当者名を入力してください:') || '不明';
@@ -458,12 +463,12 @@
         }
 
         /**
-         * 振込済処理を実行する
+         * 支払済処理を実行する
          * @param {string | string[]} keiriIds - 処理対象の経理処理ID (単一または配列)
          */
         function handleProcess(keiriIds, keiriTantouName) {
             keiriIds = Array.isArray(keiriIds) ? keiriIds : [keiriIds];
-            showLoading(true, '振込済処理を実行中...');
+            showLoading(true, '支払済処理を実行中...'); // (vOmatome 修正)
 
             google.script.run
                 .withSuccessHandler(function(result) {
@@ -473,7 +478,8 @@
                 })
                 .withFailureHandler(function(error) {
                     showLoading(false);
-                    showCustomAlert('振込済処理中にGASエラーが発生しました: ' + error.message, true);
+                    // (vOmatome 修正)
+                    showCustomAlert('支払済処理中にGASエラーが発生しました: ' + error.message, true);
                 })
                 .markAsProcessed(keiriIds, keiriTantouName);
         }
