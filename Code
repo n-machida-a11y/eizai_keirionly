@@ -21,9 +21,9 @@ var GENERAL_MASTER_DB_ID = '1CJchjuO03CB0OYmyzdtaOq3N71fRXddG7QBSCJPn1GM';
 var ACCOUNTANT_CHECK_MASTER_ID = '1CJchjuO03CB0OYmyzdtaOq3N71fRXddG7QBSCJPn1GM';
 
 // 6. 経理担当者の判定基準（社員マスタ内の列名と値）
-// (vKeiri 修正) 一時的に全員に権限を付与するため、判定基準をコメントアウト
-// var ACCOUNTANT_CHECK_COLUMN_NAME = '所属部門 (コード)'; // 例: '役職名'
-// var ACCOUNTANT_CHECK_VALUE = '100'; // 例: '経理部'
+// (vKeiri 修正) 権限チェックを有効化
+var ACCOUNTANT_CHECK_COLUMN_NAME = '所属部門 (コード)'; // 社員マスタの列名
+var ACCOUNTANT_CHECK_VALUE = '100'; // 経理部門のコード (環境に合わせて変更してください)
 
 // -----------------------------------------------
 // シート名定義（元のファイルからコピー）
@@ -75,18 +75,19 @@ function doGet(e) {
 
 /**
  * ログインユーザーの情報を取得し、経理担当者か判定する
- * (vKeiri 修正) 経理以外もログインできるように、一時的に権限チェックを無効化
+ * (vKeiri 修正) 権限チェックを有効化し、getActiveUserを使用
  */
 function getUserInfoAndAccess_() {
-  var email = Session.getEffectiveUser().getEmail();
+  // ★重要: "Me"でデプロイしている場合、getEffectiveUser()は管理者になってしまうため、
+  // アクセスしている本人を取得するには getActiveUser() を使います。
+  var email = Session.getActiveUser().getEmail();
   var name = 'ゲスト';
-  // var isAccountant = false; // (vKeiri 修正) 権限チェックを一時的に無効化
+  var isAccountant = false; // デフォルトは権限なし
 
   try {
     if (!ACCOUNTANT_CHECK_MASTER_ID || ACCOUNTANT_CHECK_MASTER_ID.indexOf('!!!') > -1) {
-      // (vKeiri 修正) IDが未設定（または初期値のまま）でもエラーにせず、名前取得をスキップ
        Logger.log('ACCOUNTANT_CHECK_MASTER_ID が未設定です。名前取得をスキップします。');
-       // (vKeiri 修正) 常に true を返してアクセス許可
+       // ID未設定時はテスト用として許可する場合
        return { name: name, email: email, isAccountant: true };
     }
     
@@ -99,11 +100,11 @@ function getUserInfoAndAccess_() {
       if (data[i]['アドレス'] === email) { 
         name = data[i]['社員名'];
         
-        // (vKeiri 修正) 判定基準に一致するかどうかのチェックを一時的にコメントアウト
-        // var checkValue = data[i][ACCOUNTANT_CHECK_COLUMN_NAME];
-        // if (checkValue && String(checkValue) === String(ACCOUNTANT_CHECK_VALUE)) {
-        //   isAccountant = true;
-        // }
+        // (vKeiri 修正) 判定基準に一致するかどうかのチェック
+        var checkValue = data[i][ACCOUNTANT_CHECK_COLUMN_NAME];
+        if (checkValue && String(checkValue) === String(ACCOUNTANT_CHECK_VALUE)) {
+          isAccountant = true;
+        }
         break;
       }
     }
@@ -111,18 +112,20 @@ function getUserInfoAndAccess_() {
     Logger.log('getUserInfoAndAccess_ Error: ' + e);
   }
   
-  // (vKeiri 修正) 経理担当者かどうかにかかわらず、常に true (アクセス許可) を返す
-  return { name: name, email: email, isAccountant: true };
+  // 判定結果を返す
+  return { name: name, email: email, isAccountant: isAccountant };
 }
 
 /**
  * 権限チェック（汎用）
  */
 function checkAccess_() {
-  if (!getUserInfoAndAccess_().isAccountant) {
+  var userInfo = getUserInfoAndAccess_();
+  // 経理担当者フラグが false の場合はエラーを投げる
+  if (!userInfo.isAccountant) {
     throw new Error('この操作を行う権限がありません。');
   }
-  return getUserInfoAndAccess_(); // 念のため実行者情報も返す
+  return userInfo; // 念のため実行者情報も返す
 }
 
 // -----------------------------------------------
@@ -954,4 +957,122 @@ function getSheetData_(sheet) {
   });
   
   return result;
+}
+
+// -----------------------------------------------
+// (vTrigger: 追加) トリガー実行用のラッパー関数
+// -----------------------------------------------
+
+/**
+ * (自動実行用) トリガーから呼び出す関数
+ * UIへの返り値 (return) を気にせず、ログ出力を行う
+ */
+function triggerAutoSync() {
+  try {
+    console.log("自動同期を開始します...");
+    
+    // 既存の同期ロジックを呼び出す
+    var result = syncDataFromSources();
+    
+    console.log("自動同期完了: " + result.message);
+  } catch (e) {
+    console.error("自動同期エラー: " + e.toString());
+  }
+}
+
+// -----------------------------------------------
+// (vRealtime: 追加) リアルタイム連携用 Web API
+// -----------------------------------------------
+
+/**
+ * 外部（営業・一般システム）からのPOSTリクエストを受け取る
+ * 申請ボタンが押された瞬間にこの関数が呼ばれ、データを登録する
+ */
+function doPost(e) {
+  var lock = LockService.getScriptLock();
+  // 複数人からの同時アクセスを防ぐ
+  if (!lock.tryLock(10000)) {
+    return createJsonResponse_({ status: 'error', message: 'サーバーが混雑しています。再度お試しください。' });
+  }
+
+  try {
+    // 1. 送られてきたデータを取り出す
+    if (!e || !e.postData) {
+      throw new Error('データが送信されていません。');
+    }
+    
+    var jsonString = e.postData.getDataAsString();
+    var payload = JSON.parse(jsonString);
+    
+    // payloadの期待値: 
+    // { 
+    //   systemType: "営業用" or "一般用", 
+    //   reportId: "...", 
+    //   details: { header: {...}, expenses: [...] } 
+    // }
+
+    var systemType = payload.systemType;
+    var reportId = payload.reportId;
+    var details = payload.details;
+    
+    if (!systemType || !reportId || !details) {
+      throw new Error('必須パラメータ(systemType, reportId, details)が不足しています。');
+    }
+
+    // 2. 重複チェック（既に経理DBにあるか？）
+    // 簡易的にヘッダーシートを確認
+    var ss = SpreadsheetApp.openById(KEIRI_DB_ID);
+    var sheet = ss.getSheetByName(KEIRI_SHEET_NAMES.HEADERS);
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    var originalIdColIdx = headers.indexOf('元申請ID');
+    var idColIdx = headers.indexOf('経理処理ID');
+    
+    var existingRowIndex = -1;
+    var existingKeiriId = null;
+    
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][originalIdColIdx]) === String(reportId)) {
+        existingRowIndex = i + 1;
+        existingKeiriId = data[i][idColIdx];
+        break;
+      }
+    }
+
+    // 3. データの登録または更新
+    var keiriShoriID;
+    
+    if (existingKeiriId) {
+      // 既に存在する場合（差戻し後の再申請など）-> 上書き更新
+      keiriShoriID = existingKeiriId;
+      updateKeiriDB_OnResubmit_(keiriShoriID, systemType, reportId, details, '振込待ち');
+      console.log("リアルタイム連携(更新): " + reportId);
+    } else {
+      // 新規の場合 -> 新規登録
+      keiriShoriID = 'PAY-' + Utilities.getUuid();
+      transferToKeiriDB_(keiriShoriID, systemType, reportId, details, '振込待ち');
+      console.log("リアルタイム連携(新規): " + reportId);
+    }
+
+    // 4. 成功レスポンスを返す
+    return createJsonResponse_({ 
+      status: 'success', 
+      message: '経理システムへの連携が完了しました。',
+      keiriId: keiriShoriID
+    });
+
+  } catch (err) {
+    console.error("doPost Error: " + err.toString());
+    return createJsonResponse_({ status: 'error', message: '連携エラー: ' + err.toString() });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * JSONレスポンスを作成するヘルパー関数
+ */
+function createJsonResponse_(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
 }
